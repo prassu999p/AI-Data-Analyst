@@ -6,4 +6,5 @@ langchain-community
 langchain-openai
 python-dotenv
 openai
-sqlalchemy 
+sqlalchemy
+psycopg2 
