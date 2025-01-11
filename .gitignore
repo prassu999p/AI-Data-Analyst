@@ -1,0 +1,32 @@
+# Environment
+.env
+
+# Logs and databases
+*.log
+*.sqlite
+*.db
+
+delete_old_table.py
+fastapi_backend_LLM_output.py
+fetch_data.py
+generate_synthetic_data.py
+ingest_data.py
+insert_sales_data.py
+nlp_to_sql.py
+sales_data.csv
+synthetic_sales_data.csv
+visualize_data.py
+
+# Ignore Python compiled files
+__pycache__/
+*.pyc
+*.pyo
+
+# Ignore IDE/editor files
+.vscode/
+.idea/
+*.swp
+
+# Ignore any other temporary files
+*.log
+*.tmp
