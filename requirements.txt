@@ -7,4 +7,5 @@ langchain-openai
 python-dotenv
 openai
 sqlalchemy
-psycopg2 
+psycopg2
+cryptography 
