@@ -5,6 +5,7 @@ from langchain_agent import LangChainAgent
 import logging
 import json
 from openai import OpenAI
+from db_manager import DatabaseManager
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -28,6 +29,22 @@ client = OpenAI()
 class Query(BaseModel):
     text: str
     chart_type: str | None = None
+    connection_id: int | None = None
+
+class DBConnectionCreate(BaseModel):
+    name: str
+    host: str
+    port: int
+    database: str
+    username: str
+    password: str
+
+class DBConnectionTest(BaseModel):
+    host: str
+    port: int
+    database: str
+    username: str
+    password: str
 
 # Initialize LangChain agent
 agent = LangChainAgent()
@@ -186,6 +203,64 @@ async def test_endpoint():
         "status": "success",
         "test_results": results
     }
+
+@app.post("/connections/test")
+async def test_connection(conn: DBConnectionTest):
+    """Test a database connection"""
+    try:
+        DatabaseManager.test_connection(
+            host=conn.host,
+            port=conn.port,
+            database=conn.database,
+            username=conn.username,
+            password=conn.password
+        )
+        return {"status": "success", "message": "Connection test successful"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/connections")
+async def add_connection(conn: DBConnectionCreate):
+    """Add a new database connection"""
+    try:
+        result = DatabaseManager.add_connection(
+            name=conn.name,
+            host=conn.host,
+            port=conn.port,
+            database=conn.database,
+            username=conn.username,
+            password=conn.password
+        )
+        return {"status": "success", "data": result}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/connections")
+async def list_connections():
+    """List all database connections"""
+    try:
+        connections = DatabaseManager.get_connections()
+        return {"status": "success", "data": connections}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/connections/{connection_id}")
+async def get_connection(connection_id: int):
+    """Get a specific database connection"""
+    try:
+        connection = DatabaseManager.get_connection(connection_id)
+        return {"status": "success", "data": connection}
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.delete("/connections/{connection_id}")
+async def delete_connection(connection_id: int):
+    """Delete a database connection"""
+    try:
+        result = DatabaseManager.delete_connection(connection_id)
+        return {"status": "success", "data": result}
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
