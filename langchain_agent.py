@@ -1,24 +1,20 @@
 from langchain_community.agent_toolkits.sql.base import create_sql_agent
 from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
-from langchain_community.utilities import SQLDatabase
 from langchain_openai import ChatOpenAI
 from langchain.memory import ConversationBufferMemory
 from dotenv import load_dotenv
 import os
 import json
+from db_manager import DatabaseConnectionManager
 
 # Load environment variables
 load_dotenv()
 
 class LangChainAgent:
     def __init__(self):
-        """Initialize the LangChain agent with database connection and tools"""
-        # Database connection
-        self.db = SQLDatabase.from_uri(
-            os.getenv("DATABASE_URL"),
-            include_tables=['sales'],
-            sample_rows_in_table_info=3
-        )
+        """Initialize the LangChain agent with database connection manager"""
+        # Initialize the database connection manager
+        self.db_manager = DatabaseConnectionManager()
         
         # Initialize the language model
         self.llm = ChatOpenAI(
@@ -27,31 +23,43 @@ class LangChainAgent:
             openai_api_key=os.getenv("OPENAI_API_KEY")
         )
 
-        # Initialize toolkit and agent
-        self.toolkit = SQLDatabaseToolkit(db=self.db, llm=self.llm)
-        self.agent = create_sql_agent(
-            llm=self.llm,
-            toolkit=self.toolkit,
-            verbose=True,
-            agent_kwargs={
-                "handle_parsing_errors": True
-            }
-        )
-
         # Initialize memory
         self.memory = ConversationBufferMemory(
             memory_key="chat_history",
             return_messages=True
         )
 
-    def process_query(self, query: str) -> dict:
-        """Process a natural language query and return the result"""
+    def _create_agent_for_connection(self, connection_id: str):
+        """Create a new agent for the specified database connection"""
+        # Get database connection
+        db = self.db_manager.get_langchain_db(connection_id)
+        if not db:
+            raise ValueError(f"No database connection found for ID: {connection_id}")
+
+        # Initialize toolkit and agent for this connection
+        toolkit = SQLDatabaseToolkit(db=db, llm=self.llm)
+        agent = create_sql_agent(
+            llm=self.llm,
+            toolkit=toolkit,
+            verbose=True,
+            agent_kwargs={
+                "handle_parsing_errors": True
+            }
+        )
+        return agent
+
+    def process_query(self, query: str, connection_id: str) -> dict:
+        """Process a natural language query for a specific database connection"""
         try:
             print("\n=== Processing Query ===")
             print(f"Input Query: {query}")
+            print(f"Connection ID: {connection_id}")
+
+            # Create agent for this connection
+            agent = self._create_agent_for_connection(connection_id)
 
             # Execute the query through the agent
-            agent_result = self.agent.invoke({
+            agent_result = agent.invoke({
                 "input": query,
                 "chat_history": self.memory.chat_memory.messages if self.memory else []
             })
@@ -99,7 +107,7 @@ class LangChainAgent:
             return {
                 "status": "error",
                 "message": str(e)
-            } 
+            }
 
 def main():
     """
@@ -117,7 +125,7 @@ def main():
     print("\n" + "="*50)
     
     # Process the query
-    result = agent.process_query(test_query)
+    result = agent.process_query(test_query, "default")
     print(result) 
     # Print formatted output
     if result['status'] == 'success':
