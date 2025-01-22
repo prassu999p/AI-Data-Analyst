@@ -1,10 +1,12 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from langchain_agent import LangChainAgent
 import logging
 import json
 from openai import OpenAI
+from database_connection import DatabaseConnection, test_connection
+from typing import Dict, Optional
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -26,8 +28,10 @@ app.add_middleware(
 client = OpenAI()
 
 class Query(BaseModel):
-    text: str
-    chart_type: str | None = None
+    query: str
+    connection: DatabaseConnection
+    chart_type: Optional[str] = None
+    color_palette: Optional[str] = "warm"
 
 # Initialize LangChain agent
 agent = LangChainAgent()
@@ -102,10 +106,19 @@ def parse_text_to_json(final_answer: str, chart_type: str):
 @app.post("/query")
 async def handle_query(query: Query):
     try:
-        logger.info(f"Processing query: {query.text}")
+        logger.info(f"Processing query: {query.query}")
+        
+        # First test the database connection
+        try:
+            connection_result = await test_connection(query.connection)
+            if connection_result["status"] != "success":
+                raise HTTPException(status_code=400, detail="Database connection failed")
+        except Exception as conn_error:
+            logger.error(f"Database connection error: {str(conn_error)}")
+            raise HTTPException(status_code=400, detail=str(conn_error))
         
         try:
-            result = agent.process_query(query.text)
+            result = agent.process_query(query.query, query.connection)
         except Exception as agent_error:
             logger.error(f"Error in agent processing: {str(agent_error)}")
             return {
@@ -132,7 +145,7 @@ async def handle_query(query: Query):
                 "answer": final_answer,
                 "sql_query": result.get("sql_data", {}).get("query"),
                 "sql_results": result.get("sql_data", {}).get("results"),
-                "chart_data": chart_data,
+                "visualization_data": chart_data,
                 "suggested_chart": suggested_chart
             }
         }
@@ -186,6 +199,22 @@ async def test_endpoint():
         "status": "success",
         "test_results": results
     }
+
+@app.post("/test-connection")
+async def test_db_connection(connection_data: DatabaseConnection) -> Dict:
+    """
+    Test database connection with provided credentials
+    """
+    try:
+        result = await test_connection(connection_data)
+        return result
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
 
 if __name__ == "__main__":
     import uvicorn

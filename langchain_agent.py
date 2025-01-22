@@ -6,36 +6,19 @@ from langchain.memory import ConversationBufferMemory
 from dotenv import load_dotenv
 import os
 import json
+from database_connection import DatabaseConnection
 
 # Load environment variables
 load_dotenv()
 
 class LangChainAgent:
     def __init__(self):
-        """Initialize the LangChain agent with database connection and tools"""
-        # Database connection
-        self.db = SQLDatabase.from_uri(
-            os.getenv("DATABASE_URL"),
-            include_tables=['sales'],
-            sample_rows_in_table_info=3
-        )
-        
+        """Initialize the LangChain agent with OpenAI model"""
         # Initialize the language model
         self.llm = ChatOpenAI(
             temperature=0,
             model_name="gpt-3.5-turbo",
             openai_api_key=os.getenv("OPENAI_API_KEY")
-        )
-
-        # Initialize toolkit and agent
-        self.toolkit = SQLDatabaseToolkit(db=self.db, llm=self.llm)
-        self.agent = create_sql_agent(
-            llm=self.llm,
-            toolkit=self.toolkit,
-            verbose=True,
-            agent_kwargs={
-                "handle_parsing_errors": True
-            }
         )
 
         # Initialize memory
@@ -44,14 +27,38 @@ class LangChainAgent:
             return_messages=True
         )
 
-    def process_query(self, query: str) -> dict:
+    def get_connection_uri(self, connection: DatabaseConnection) -> str:
+        """Generate a database URI from connection details"""
+        if connection.type.lower() == "postgresql":
+            return f"postgresql://{connection.username}:{connection.password}@{connection.host}:{connection.port}/{connection.database_name}"
+        elif connection.type.lower() == "mysql":
+            return f"mysql+pymysql://{connection.username}:{connection.password}@{connection.host}:{connection.port}/{connection.database_name}"
+        else:
+            raise ValueError(f"Unsupported database type: {connection.type}")
+
+    def process_query(self, query: str, connection: DatabaseConnection) -> dict:
         """Process a natural language query and return the result"""
         try:
             print("\n=== Processing Query ===")
             print(f"Input Query: {query}")
 
+            # Set up database connection
+            connection_uri = self.get_connection_uri(connection)
+            db = SQLDatabase.from_uri(connection_uri)
+            
+            # Initialize toolkit and agent for this query
+            toolkit = SQLDatabaseToolkit(db=db, llm=self.llm)
+            agent = create_sql_agent(
+                llm=self.llm,
+                toolkit=toolkit,
+                verbose=True,
+                agent_kwargs={
+                    "handle_parsing_errors": True
+                }
+            )
+
             # Execute the query through the agent
-            agent_result = self.agent.invoke({
+            agent_result = agent.invoke({
                 "input": query,
                 "chat_history": self.memory.chat_memory.messages if self.memory else []
             })
@@ -99,16 +106,22 @@ class LangChainAgent:
             return {
                 "status": "error",
                 "message": str(e)
-            } 
+            }
 
 def main():
-    """
-    Main function to demonstrate agent functionality with a single query
-    """
+    """Main function for testing"""
     print("\n=== DataViz AI Agent Demo ===")
-    
-    # Initialize the agent
     agent = LangChainAgent()
+    
+    # Test connection details
+    test_connection = DatabaseConnection(
+        type="postgresql",
+        host="localhost",
+        port=5432,
+        database_name="test_db",
+        username="test_user",
+        password="test_password"
+    )
     
     # Test query
     test_query = "Display the monthly sales trend for Product A in 2023"
@@ -117,8 +130,8 @@ def main():
     print("\n" + "="*50)
     
     # Process the query
-    result = agent.process_query(test_query)
-    print(result) 
+    result = agent.process_query(test_query, test_connection)
+    
     # Print formatted output
     if result['status'] == 'success':
         print("\nQuery Execution Successful!")
