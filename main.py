@@ -2,10 +2,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from langchain_agent import LangChainAgent
+from typing import Optional, List
 import logging
 import json
 from openai import OpenAI
-from db_manager import DatabaseManager
+import uuid
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -28,23 +29,20 @@ client = OpenAI()
 
 class Query(BaseModel):
     text: str
-    chart_type: str | None = None
-    connection_id: int | None = None
+    connection_id: str
+    chart_type: Optional[str] = None
 
-class DBConnectionCreate(BaseModel):
+class DatabaseConnection(BaseModel):
     name: str
+    type: str
     host: str
     port: int
     database: str
     username: str
     password: str
 
-class DBConnectionTest(BaseModel):
-    host: str
-    port: int
-    database: str
-    username: str
-    password: str
+class TestConnection(BaseModel):
+    connection_id: str
 
 # Initialize LangChain agent
 agent = LangChainAgent()
@@ -116,13 +114,97 @@ def parse_text_to_json(final_answer: str, chart_type: str):
         logger.error(f"Error parsing text to JSON: {str(e)}")
         return {"error": str(e)}
 
+@app.post("/connections")
+async def create_connection(connection: DatabaseConnection):
+    """Create a new database connection"""
+    try:
+        # Generate connection URI based on database type
+        if connection.type.lower() == "postgresql":
+            uri = f"postgresql://{connection.username}:{connection.password}@{connection.host}:{connection.port}/{connection.database}"
+        elif connection.type.lower() == "mysql":
+            uri = f"mysql+pymysql://{connection.username}:{connection.password}@{connection.host}:{connection.port}/{connection.database}"
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported database type")
+
+        # Create connection details
+        connection_id = str(uuid.uuid4())
+        connection_details = {
+            "id": connection_id,
+            "name": connection.name,
+            "type": connection.type,
+            "host": connection.host,
+            "port": connection.port,
+            "database": connection.database,
+            "username": connection.username,
+            "password": connection.password,
+            "uri": uri
+        }
+
+        # Test the connection
+        if not agent.db_manager.test_connection(connection_details):
+            raise HTTPException(status_code=400, detail="Failed to connect to database")
+
+        # Add the connection
+        agent.db_manager.add_connection(connection_details)
+        
+        # Return connection details without sensitive information
+        return {
+            "data": {
+                "id": connection_id,
+                "name": connection.name,
+                "type": connection.type,
+                "host": connection.host,
+                "port": connection.port,
+                "database": connection.database,
+                "username": connection.username
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Error creating connection: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/connections")
+async def list_connections():
+    """List all database connections"""
+    try:
+        connections = agent.db_manager.list_connections()
+        # Remove sensitive information and format response
+        formatted_connections = []
+        for conn in connections:
+            formatted_connections.append({
+                "id": conn["id"],
+                "name": conn["name"],
+                "type": conn["type"],
+                "host": conn["host"],
+                "port": conn["port"],
+                "database": conn["database"],
+                "username": conn["username"]
+            })
+        return {"data": formatted_connections}
+    except Exception as e:
+        logger.error(f"Error listing connections: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/connections/{connection_id}")
+async def delete_connection(connection_id: str):
+    """Delete a database connection"""
+    try:
+        if agent.db_manager.remove_connection(connection_id):
+            return {"message": "Connection deleted successfully"}
+        raise HTTPException(status_code=404, detail="Connection not found")
+    except Exception as e:
+        logger.error(f"Error deleting connection: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/query")
 async def handle_query(query: Query):
     try:
         logger.info(f"Processing query: {query.text}")
+        logger.info(f"Using connection: {query.connection_id}")
         
         try:
-            result = agent.process_query(query.text)
+            result = agent.process_query(query.text, query.connection_id)
         except Exception as agent_error:
             logger.error(f"Error in agent processing: {str(agent_error)}")
             return {
@@ -160,49 +242,204 @@ async def handle_query(query: Query):
         logger.error(f"Exception in handle_query: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/connections/test")
+async def test_connection(test_data: TestConnection):
+    """Test a specific database connection"""
+    try:
+        connection = agent.db_manager.get_connection(test_data.connection_id)
+        if not connection:
+            raise HTTPException(status_code=404, detail="Connection not found")
+
+        # Test the connection
+        if agent.db_manager.test_connection(connection):
+            # Try a simple test query
+            test_result = agent.process_query("Show me the list of tables", test_data.connection_id)
+            return {
+                "status": "success",
+                "message": "Connection test successful",
+                "test_query_result": test_result
+            }
+        else:
+            raise HTTPException(status_code=400, detail="Failed to connect to database")
+
+    except Exception as e:
+        logger.error(f"Error testing connection: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/connections/verify")
+async def verify_connection(connection: DatabaseConnection):
+    """Verify a database connection before creating it"""
+    try:
+        # Generate connection URI based on database type
+        if connection.type.lower() == "postgresql":
+            uri = f"postgresql://{connection.username}:{connection.password}@{connection.host}:{connection.port}/{connection.database}"
+        elif connection.type.lower() == "mysql":
+            uri = f"mysql+pymysql://{connection.username}:{connection.password}@{connection.host}:{connection.port}/{connection.database}"
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported database type")
+
+        # Create temporary connection details for testing
+        connection_details = {
+            "id": "temp",
+            "name": connection.name,
+            "type": connection.type,
+            "host": connection.host,
+            "port": connection.port,
+            "database": connection.database,
+            "username": connection.username,
+            "password": connection.password,
+            "uri": uri
+        }
+
+        # Test the connection
+        if agent.db_manager.test_connection(connection_details):
+            return {"status": "success", "message": "Connection verification successful"}
+        else:
+            raise HTTPException(status_code=400, detail="Failed to connect to database")
+
+    except Exception as e:
+        logger.error(f"Error verifying connection: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/test")
 async def test_endpoint():
     """Test endpoint to verify API functionality"""
-    test_queries = [
-        "Show me total sales by product for 2023",
-        "Display the monthly sales trend for Product A in 2023",
-        "What is the market share distribution among our competitors?"
-    ]
-    
-    results = []
-    for query in test_queries:
-        try:
-            result = agent.process_query(query)
-            final_answer = result.get("llm_analysis", {}).get("final_answer")
-            suggested_chart = suggest_chart_type(final_answer)
-            chart_data = parse_text_to_json(final_answer, suggested_chart)
-            
-            results.append({
-                "query": query,
-                "status": result.get("status"),
-                "answer": final_answer,
-                "has_sql": bool(result.get("sql_data", {}).get("query")),
-                "has_results": bool(result.get("sql_data", {}).get("results")),
-                "suggested_chart": suggested_chart,
-                "chart_data": chart_data,
-                "error": None
-            })
-        except Exception as e:
-            results.append({
-                "query": query,
+    try:
+        # Get the first available connection
+        connections = agent.db_manager.list_connections()
+        if not connections:
+            return {
                 "status": "error",
-                "answer": None,
-                "has_sql": False,
-                "has_results": False,
-                "suggested_chart": None,
-                "chart_data": None,
-                "error": str(e)
-            })
-    
-    return {
-        "status": "success",
-        "test_results": results
-    }
+                "message": "No database connections available for testing"
+            }
+        
+        test_connection = connections[0]
+        test_queries = [
+            "Show me total sales by product for 2023",
+            "Display the monthly sales trend for Product A in 2023",
+            "What is the market share distribution among our competitors?"
+        ]
+        
+        results = []
+        for query in test_queries:
+            try:
+                result = agent.process_query(query, test_connection['id'])
+                final_answer = result.get("llm_analysis", {}).get("final_answer")
+                suggested_chart = suggest_chart_type(final_answer)
+                chart_data = parse_text_to_json(final_answer, suggested_chart)
+                
+                results.append({
+                    "query": query,
+                    "status": result.get("status"),
+                    "answer": final_answer,
+                    "has_sql": bool(result.get("sql_data", {}).get("query")),
+                    "has_results": bool(result.get("sql_data", {}).get("results")),
+                    "suggested_chart": suggested_chart,
+                    "chart_data": chart_data,
+                    "error": None
+                })
+            except Exception as e:
+                results.append({
+                    "query": query,
+                    "status": "error",
+                    "answer": None,
+                    "has_sql": False,
+                    "has_results": False,
+                    "suggested_chart": None,
+                    "chart_data": None,
+                    "error": str(e)
+                })
+        
+        return {
+            "status": "success",
+            "connection_used": test_connection['name'],
+            "test_results": results
+        }
+    except Exception as e:
+        logger.error(f"Error in test endpoint: {str(e)}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+@app.get("/connections/{connection_id}")
+async def get_connection(connection_id: str):
+    """Get a specific database connection"""
+    try:
+        connection = agent.db_manager.get_connection(connection_id)
+        if not connection:
+            raise HTTPException(status_code=404, detail="Connection not found")
+        
+        # Return connection details without sensitive information
+        return {
+            "data": {
+                "id": connection["id"],
+                "name": connection["name"],
+                "type": connection["type"],
+                "host": connection["host"],
+                "port": connection["port"],
+                "database": connection["database"],
+                "username": connection["username"]
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error getting connection: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/connections/{connection_id}")
+async def update_connection(connection_id: str, connection: DatabaseConnection):
+    """Update a database connection"""
+    try:
+        # Check if connection exists
+        existing_connection = agent.db_manager.get_connection(connection_id)
+        if not existing_connection:
+            raise HTTPException(status_code=404, detail="Connection not found")
+
+        # Generate connection URI based on database type
+        if connection.type.lower() == "postgresql":
+            uri = f"postgresql://{connection.username}:{connection.password}@{connection.host}:{connection.port}/{connection.database}"
+        elif connection.type.lower() == "mysql":
+            uri = f"mysql+pymysql://{connection.username}:{connection.password}@{connection.host}:{connection.port}/{connection.database}"
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported database type")
+
+        # Create updated connection details
+        connection_details = {
+            "id": connection_id,
+            "name": connection.name,
+            "type": connection.type,
+            "host": connection.host,
+            "port": connection.port,
+            "database": connection.database,
+            "username": connection.username,
+            "password": connection.password,
+            "uri": uri
+        }
+
+        # Test the connection
+        if not agent.db_manager.test_connection(connection_details):
+            raise HTTPException(status_code=400, detail="Failed to connect to database")
+
+        # Update the connection
+        agent.db_manager.remove_connection(connection_id)
+        agent.db_manager.add_connection(connection_details)
+        
+        # Return updated connection details without sensitive information
+        return {
+            "data": {
+                "id": connection_id,
+                "name": connection.name,
+                "type": connection.type,
+                "host": connection.host,
+                "port": connection.port,
+                "database": connection.database,
+                "username": connection.username
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Error updating connection: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/connections/test")
 async def test_connection(conn: DBConnectionTest):
