@@ -1,21 +1,19 @@
 from langchain_community.agent_toolkits.sql.base import create_sql_agent
 from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
+from langchain_community.utilities import SQLDatabase
 from langchain_openai import ChatOpenAI
 from langchain.memory import ConversationBufferMemory
 from dotenv import load_dotenv
 import os
 import json
-from db_manager import DatabaseConnectionManager
+from database_connection import DatabaseConnection
 
 # Load environment variables
 load_dotenv()
 
 class LangChainAgent:
     def __init__(self):
-        """Initialize the LangChain agent with database connection manager"""
-        # Initialize the database connection manager
-        self.db_manager = DatabaseConnectionManager()
-        
+        """Initialize the LangChain agent with OpenAI model"""
         # Initialize the language model
         self.llm = ChatOpenAI(
             temperature=0,
@@ -29,34 +27,35 @@ class LangChainAgent:
             return_messages=True
         )
 
-    def _create_agent_for_connection(self, connection_id: str):
-        """Create a new agent for the specified database connection"""
-        # Get database connection
-        db = self.db_manager.get_langchain_db(connection_id)
-        if not db:
-            raise ValueError(f"No database connection found for ID: {connection_id}")
+    def get_connection_uri(self, connection: DatabaseConnection) -> str:
+        """Generate a database URI from connection details"""
+        if connection.type.lower() == "postgresql":
+            return f"postgresql://{connection.username}:{connection.password}@{connection.host}:{connection.port}/{connection.database_name}"
+        elif connection.type.lower() == "mysql":
+            return f"mysql+pymysql://{connection.username}:{connection.password}@{connection.host}:{connection.port}/{connection.database_name}"
+        else:
+            raise ValueError(f"Unsupported database type: {connection.type}")
 
-        # Initialize toolkit and agent for this connection
-        toolkit = SQLDatabaseToolkit(db=db, llm=self.llm)
-        agent = create_sql_agent(
-            llm=self.llm,
-            toolkit=toolkit,
-            verbose=True,
-            agent_kwargs={
-                "handle_parsing_errors": True
-            }
-        )
-        return agent
-
-    def process_query(self, query: str, connection_id: str) -> dict:
-        """Process a natural language query for a specific database connection"""
+    def process_query(self, query: str, connection: DatabaseConnection) -> dict:
+        """Process a natural language query and return the result"""
         try:
             print("\n=== Processing Query ===")
             print(f"Input Query: {query}")
-            print(f"Connection ID: {connection_id}")
 
-            # Create agent for this connection
-            agent = self._create_agent_for_connection(connection_id)
+            # Set up database connection
+            connection_uri = self.get_connection_uri(connection)
+            db = SQLDatabase.from_uri(connection_uri)
+            
+            # Initialize toolkit and agent for this query
+            toolkit = SQLDatabaseToolkit(db=db, llm=self.llm)
+            agent = create_sql_agent(
+                llm=self.llm,
+                toolkit=toolkit,
+                verbose=True,
+                agent_kwargs={
+                    "handle_parsing_errors": True
+                }
+            )
 
             # Execute the query through the agent
             agent_result = agent.invoke({
@@ -110,13 +109,19 @@ class LangChainAgent:
             }
 
 def main():
-    """
-    Main function to demonstrate agent functionality with a single query
-    """
+    """Main function for testing"""
     print("\n=== DataViz AI Agent Demo ===")
-    
-    # Initialize the agent
     agent = LangChainAgent()
+    
+    # Test connection details
+    test_connection = DatabaseConnection(
+        type="postgresql",
+        host="localhost",
+        port=5432,
+        database_name="test_db",
+        username="test_user",
+        password="test_password"
+    )
     
     # Test query
     test_query = "Display the monthly sales trend for Product A in 2023"
@@ -125,8 +130,8 @@ def main():
     print("\n" + "="*50)
     
     # Process the query
-    result = agent.process_query(test_query, "default")
-    print(result) 
+    result = agent.process_query(test_query, test_connection)
+    
     # Print formatted output
     if result['status'] == 'success':
         print("\nQuery Execution Successful!")

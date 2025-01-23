@@ -7,5 +7,9 @@ langchain-openai
 python-dotenv
 openai
 sqlalchemy
-psycopg2
-cryptography 
+psycopg2-binary
+pymysql
+pymongo
+cryptography
+python-jose[cryptography]
+passlib[bcrypt] 
