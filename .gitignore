@@ -16,6 +16,8 @@ nlp_to_sql.py
 sales_data.csv
 synthetic_sales_data.csv
 visualize_data.py
+test_cases.py
+API_DOCUMENTATION.md
 
 # Ignore Python compiled files
 __pycache__/
@@ -30,3 +32,4 @@ __pycache__/
 # Ignore any other temporary files
 *.log
 *.tmp
+
